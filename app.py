@@ -1,138 +1,129 @@
 import streamlit as st
 import google.generativeai as genai
 import json
-import re
 
-# --- Page Config ---
+# Page Config
 st.set_page_config(page_title="IELTS Reading Simulator", layout="wide")
 
-# --- Session State Initialization ---
-# We use this to keep the test data persistent across reruns
-if "test_data" not in st.session_state:
-    st.session_state.test_data = None
-if "user_answers" not in st.session_state:
-    st.session_state.user_answers = {}
-if "submitted" not in st.session_state:
-    st.session_state.submitted = False
+st.title("📚 IELTS Reading Simulator")
+st.markdown("Generates unique reading passages and questions using Google AI.")
 
-# --- Sidebar: API Key ---
+# --- SIDEBAR: API KEY ---
 with st.sidebar:
-    st.title("Settings")
+    st.header("Settings")
     api_key = st.text_input("Enter Gemini API Key", type="password")
-    st.info("Get your key from [Google AI Studio](https://aistudio.google.com/)")
+    st.markdown("[Get a Key from Google AI Studio](https://aistudio.google.com/app/apikey)")
 
-# --- Helper Functions ---
-def generate_test(api_key):
-    try:
-        genai.configure(api_key=api_key)
-        # --- SMART MODEL SELECTOR ---
-    # This asks Google what models are actually available to this specific API Key
+# --- SESSION STATE (Memory) ---
+if 'passage_data' not in st.session_state:
+    st.session_state['passage_data'] = None
+
+# --- MAIN LOGIC ---
+if api_key:
+    # 1. Configure API
+    genai.configure(api_key=api_key)
+
+    # 2. SMART MODEL SELECTOR (This fixes the 404/Version errors)
     try:
         available_models = []
+        # Ask Google which models are actually available to THIS key
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
                 available_models.append(m.name)
         
         if not available_models:
-            st.error("No AI models found. Google is blocking this API Key/Region.")
+            st.error("❌ No models found. Your API Key might be restricted.")
             st.stop()
 
-        # Logic: Try to find a 'flash' model first (fast), otherwise take the first available
+        # Logic: Prefer 'flash' (fast), otherwise take 'pro', otherwise take first available
+        # This prevents guessing names like 'gemini-1.5-flash' if Google renames them.
         selected_model_name = next((m for m in available_models if 'flash' in m), available_models[0])
         
-        # Display which model is being used (Good for debugging/research transparency)
-        st.sidebar.success(f"✅ Connected to: {selected_model_name}")
-        
+        st.sidebar.success(f"✅ AI Connected: {selected_model_name}")
         model = genai.GenerativeModel(selected_model_name)
 
     except Exception as e:
-        st.error(f"Error connecting to Google: {e}")
+        st.error(f"❌ Connection Error: {e}")
         st.stop()
-        
-        prompt = """
-        Generate an IELTS Academic Reading test in STRICT JSON format.
-        The JSON must contain:
-        1. "title": A professional academic title.
-        2. "passage": A 300-word academic text.
-        3. "questions": A list of 3 questions.
-           - Mix Multiple Choice and True/False.
-           - Each question must have: "id" (int), "question_text" (string), "type" (MCQ/TF), "options" (list of strings or null for TF), "correct_answer" (string).
-        
-        Return ONLY the JSON object. No markdown, no preamble.
-        """
-        
-        response = model.generate_content(prompt)
-        # Remove potential markdown code blocks (```json ... ```)
-        clean_json = re.sub(r'```json|```', '', response.text).strip()
-        return json.loads(clean_json)
-    except Exception as e:
-        st.error(f"Error generating test: {e}")
-        return None
 
-# --- Main UI ---
-st.title("📖 IELTS Reading Simulator")
+    # 3. GENERATE BUTTON
+    if st.button("Generate New Reading Test", type="primary"):
+        with st.spinner("AI is writing a new exam for you... (this takes 5-10s)"):
+            try:
+                # The Prompt
+                prompt = """
+                Create an IELTS Academic Reading passage (approx 300 words). 
+                Topic: Random (Science, History, or Nature).
+                Create 3 questions: 
+                - 2 Multiple Choice
+                - 1 True/False/Not Given.
+                
+                Output ONLY valid JSON in this format:
+                {
+                    "title": "Passage Title",
+                    "passage": "Full text here...",
+                    "questions": [
+                        {"id": 1, "text": "Question 1?", "options": ["A", "B", "C"], "answer": "A"},
+                        {"id": 2, "text": "Question 2?", "options": ["True", "False", "Not Given"], "answer": "True"}
+                    ]
+                }
+                """
+                
+                response = model.generate_content(prompt)
+                text = response.text
+                
+                # Clean up JSON (remove ```json wrappers if AI adds them)
+                text = text.replace("```json", "").replace("```", "").strip()
+                
+                # Parse and Save to Memory
+                data = json.loads(text)
+                st.session_state['passage_data'] = data
+                st.rerun() # Refresh to show data
 
-if st.button("Generate New Reading Test"):
-    if not api_key:
-        st.warning("Please provide an API Key in the sidebar first!")
-    else:
-        with st.spinner("Generating academic passage..."):
-            data = generate_test(api_key)
-            if data:
-                st.session_state.test_data = data
-                st.session_state.user_answers = {} # Reset answers
-                st.session_state.submitted = False
-                st.rerun()
+            except Exception as e:
+                st.error(f"Generation Failed: {e}")
 
-# --- Display Content ---
-if st.session_state.test_data:
-    data = st.session_state.test_data
-    
-    col1, col2 = st.columns([1.5, 1], gap="large")
+# --- DISPLAY SECTION ---
+data = st.session_state['passage_data']
+
+if data:
+    col1, col2 = st.columns([1.2, 1])
     
     with col1:
-        st.subheader(data['title'])
-        st.markdown(data['passage'])
+        st.subheader(f"📖 {data['title']}")
+        st.write(data['passage'])
     
     with col2:
-        st.subheader("Questions")
-        for q in data['questions']:
-            q_id = str(q['id'])
-            
-            # Display Question
-            if q['type'] == "MCQ":
-                st.session_state.user_answers[q_id] = st.radio(
-                    f"**Question {q_id}:** {q['question_text']}",
-                    options=q['options'],
-                    key=f"q_{q_id}",
-                    index=None if q_id not in st.session_state.user_answers else None # Simplification
-                )
-            else: # True/False
-                st.session_state.user_answers[q_id] = st.radio(
-                    f"**Question {q_id}:** {q['question_text']}",
-                    options=["True", "False", "Not Given"],
-                    key=f"q_{q_id}",
-                    index=None
-                )
+        st.subheader("📝 Questions")
+        user_answers = {}
         
-        # --- Grading Logic ---
-        if st.button("Check Answers"):
-            st.session_state.submitted = True
-            
-        if st.session_state.submitted:
-            score = 0
-            st.divider()
+        with st.form("quiz_form"):
             for q in data['questions']:
-                q_id = str(q['id'])
-                user_ans = st.session_state.user_answers.get(q_id)
-                correct_ans = q['correct_answer']
-                
-                if user_ans == correct_ans:
-                    score += 1
-                    st.success(f"Q{q_id}: Correct! ({correct_ans})")
-                else:
-                    st.error(f"Q{q_id}: Incorrect. You said '{user_ans}'. Correct: '{correct_ans}'")
+                st.write(f"**{q['id']}. {q['text']}**")
+                # Create radio buttons for options
+                user_answers[q['id']] = st.radio(
+                    "Select answer:", 
+                    q['options'], 
+                    key=f"q_{q['id']}", 
+                    label_visibility="collapsed"
+                )
+                st.divider()
             
-            st.metric("Final Score", f"{score}/{len(data['questions'])}")
+            submitted = st.form_submit_button("Check Answers")
+            
+            if submitted:
+                score = 0
+                for q in data['questions']:
+                    correct = q['answer']
+                    user_ans = user_answers[q['id']]
+                    if user_ans == correct:
+                        score += 1
+                        st.success(f"Q{q['id']}: Correct!")
+                    else:
+                        st.error(f"Q{q['id']}: Incorrect. Answer was {correct}")
+                
+                st.metric("Final Score", f"{score}/{len(data['questions'])}")
+
 else:
-    st.write("Click the button to generate your first mock exam.")
+    if not api_key:
+        st.info("👈 Please paste your API Key in the sidebar to begin.")
