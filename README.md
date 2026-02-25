@@ -1,1 +1,2 @@
-# Iielts-reading-streamlit
+streamlit
+google-generativeai
