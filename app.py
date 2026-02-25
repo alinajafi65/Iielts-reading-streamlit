@@ -25,7 +25,29 @@ with st.sidebar:
 def generate_test(api_key):
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        # --- SMART MODEL SELECTOR ---
+    # This asks Google what models are actually available to this specific API Key
+    try:
+        available_models = []
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                available_models.append(m.name)
+        
+        if not available_models:
+            st.error("No AI models found. Google is blocking this API Key/Region.")
+            st.stop()
+
+        # Logic: Try to find a 'flash' model first (fast), otherwise take the first available
+        selected_model_name = next((m for m in available_models if 'flash' in m), available_models[0])
+        
+        # Display which model is being used (Good for debugging/research transparency)
+        st.sidebar.success(f"✅ Connected to: {selected_model_name}")
+        
+        model = genai.GenerativeModel(selected_model_name)
+
+    except Exception as e:
+        st.error(f"Error connecting to Google: {e}")
+        st.stop()
         
         prompt = """
         Generate an IELTS Academic Reading test in STRICT JSON format.
